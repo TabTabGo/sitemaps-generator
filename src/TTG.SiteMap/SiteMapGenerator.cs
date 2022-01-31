@@ -4,6 +4,8 @@ using System.Data;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -138,23 +140,58 @@ namespace TTG.SiteMap
             return $"{baseUrl}{(string.IsNullOrEmpty(parentFolder)? "": "/"+parentFolder)}/{batchName}.xml{(compressed ? ".gz" : "")}";
         }
 
-        public virtual string GetUrl(string baseUrl, string url, DataRow row)
+        /// <summary>
+        /// Parse url for site map url set and populate the site map keys 
+        /// </summary>
+        /// <param name="baseUrl"></param>
+        /// <param name="url"></param>
+        /// <param name="row"></param>
+        /// <returns></returns>
+        public virtual string ParseUrl(string baseUrl, string url, DataRow row)
         {
             var dicValues = new Dictionary<string, string>();
-            var regex = new Regex(@"\{([\w:()\-\""]+)\}");
+            var regex = new Regex(@"\{([\w:()\-\""']+)\}");
             var matches = regex.Matches(url);
+            string key = null;
+            string value = string.Empty;
+
             foreach (Match match in matches)
             {
-                var key = match.Groups[1].Value;
-                // TODO handle format or function
-                var value = row[key].ToString();
-                dicValues.Add(key, value);
+                var expr = match.Groups[1].Value;
+                if (expr.Contains(":"))
+                {
+                    var keyParts = expr.Split(':');
+                    if (keyParts.Length == 2)
+                    {
+                         key = keyParts[0];
+                         // regex to get function and params
+                         var functionRegex = new Regex(@"^([\w]+)\((.*)\)$");
+                         var functionMatch = functionRegex.Match(keyParts[1]);
+                         if (functionMatch.Success)
+                         {
+                             var function = functionMatch.Groups[1].Value;
+                             var functionParams = functionMatch.Groups[2].Value.Split(',');
+                             value = GetFunctionValue(function, functionParams, row[key].ToString());
+                         }
+                         else
+                         {
+                             value = row[key].ToString();
+                         }
+                    }
+                }
+                else
+                {
+                    key = expr;
+                    value = row[key].ToString();
+                }
+                dicValues.Add(expr, value);
+                
             }
 
             return
                 $"{baseUrl}/{dicValues.Keys.Aggregate(url, (current, key) => current.Replace("{" + key + "}", dicValues[key]))}";
         }
-
+        
         public virtual string CreateUrlRuleSetFile(DataTable entites, string baseUrl, string batchName,
             BatchConfiguration batchConfiguration, string output, string parentFolder = null)
         {
@@ -163,7 +200,7 @@ namespace TTG.SiteMap
             foreach (DataRow row in entites.Rows)
             {
                 urlSet.AddUrl(
-                    GetUrl(baseUrl, batchConfiguration.Url, row),
+                    ParseUrl(baseUrl, batchConfiguration.Url, row),
                     DateTime.TryParse(row[batchConfiguration.ModifiedDateColumn].ToString(), out modifiedDate)
                         ? modifiedDate
                         : DateTime.Now,
@@ -173,6 +210,57 @@ namespace TTG.SiteMap
 
             // Generate XML
             return GenerateXMlFile(urlSet.Build(), baseUrl, output, batchName, batchConfiguration.Compress, parentFolder);
+        }
+        
+        /// <summary>
+        /// Run string extension method to get function value
+        /// </summary>
+        /// <param name="function">function name</param>
+        /// <param name="functionParams">list of parameter value</param>
+        /// <param name="dataValue">data value</param>
+        /// <returns></returns>
+        private string GetFunctionValue(string function, string[] functionParams, string dataValue)
+        {
+            if (string.IsNullOrEmpty(dataValue)) return string.Empty;
+            var methods = GetExtensionMethods(typeof(SiteMapGenerator).Assembly, typeof(string));
+            var method = methods.FirstOrDefault(m => m.Name == function);
+            if (method != null)
+            {
+                var parameters = new List<object>();
+                if (method.IsStatic && method.IsDefined(typeof(ExtensionAttribute), false))
+                {
+                    parameters.Add(dataValue);
+                }
+
+                foreach (var param in functionParams.Where(t => !string.IsNullOrEmpty(t)))
+                {
+                    //remove ' or " from param value
+                    var paramValue = param.Trim('\'').Trim('"');
+                    parameters.Add(paramValue);
+                }
+                
+                return method.Invoke(dataValue,parameters.ToArray()).ToString();
+            }
+            return dataValue;
+        }
+        
+        /// <summary>
+        /// Get list of extensions in an assembly and function for a type
+        /// </summary>
+        /// <param name="assembly"></param>
+        /// <param name="extendedType"></param>
+        /// <returns></returns>
+        private IEnumerable<MethodInfo> GetExtensionMethods(Assembly assembly,
+            Type extendedType)
+        {
+            var query = assembly.GetTypes()
+                .Where(type => type.IsSealed && !type.IsGenericType && !type.IsNested)
+                .SelectMany(type => type.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                .Where(method => method.IsDefined(typeof(ExtensionAttribute), false) &&
+                                 method.GetParameters()[0].ParameterType == extendedType).ToList();
+             
+            query.AddRange(extendedType.GetMethods().Where(method => method.IsPublic));
+            return query;
         }
     }
 }

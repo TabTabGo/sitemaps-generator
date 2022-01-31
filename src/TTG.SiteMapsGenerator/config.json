@@ -4,14 +4,14 @@
   "batches": [
     {
       "name": "Books",
-      "url": "books/{bookId}-{title}",
+      "url": "books/{bookId:Trim()}-{title:NormalizeString('-')}",
       "selectQuery": "SELECT BookId, TitleNormalized as Title, UpdatedDate FROM Books WHERE IsEnabled = 1",
       "orderByColumn": "BookId",
       "modifiedDateColumn": "UpdatedDate"
     },
     {
       "name": "Poems",
-      "url": "poems/{poemId}-{title}",
+      "url": "poems/{poemId}-{title:NormalizeString('-')}",
       "selectQuery": "select PoemId, NormalizeFirstVerse as Title, UpdatedDate  from Poems where IsEnabled = 1",
       "orderByColumn": "PoemId",
       "modifiedDateColumn": "UpdatedDate"

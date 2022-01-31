@@ -244,5 +244,5 @@ ConnectionStrings.config
 #/BOLIGNET.API.Core/Config/**.json
 
 # Remove Idea files
-*.idea
+*.idea/
 *.db
